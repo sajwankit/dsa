@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Custom iPhone 13: Blue Rails × Midnight Glass</title>
+<style>
+  :root{
+    --ink:#f2f4f8;
+    --muted:#9aa4b4;
+    --panel:rgba(18,20,26,.62);
+    --stroke:rgba(255,255,255,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:#1e1e24;
+    color:var(--ink);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  #stage{position:fixed;inset:0}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+
+  .hud{
+    position:fixed;top:16px;left:16px;
+    width:min(300px,calc(100vw - 32px));
+    padding:14px 15px 13px;
+    border-radius:14px;
+    background:var(--panel);
+    border:1px solid var(--stroke);
+    backdrop-filter:blur(14px) saturate(140%);
+    -webkit-backdrop-filter:blur(14px) saturate(140%);
+    box-shadow:0 18px 44px rgba(0,0,0,.45);
+  }
+  .hud h1{
+    margin:0 0 2px;
+    font-size:14px;letter-spacing:.2px;font-weight:600;
+  }
+  .hud p{margin:0;color:var(--muted);font-size:11.5px;letter-spacing:.25px}
+
+  .swatches{display:flex;gap:14px;margin:12px 0 12px}
+  .sw{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--muted)}
+  .dot{width:13px;height:13px;border-radius:50%;border:1px solid rgba(255,255,255,.18);flex:none}
+  .dot.blue{background:linear-gradient(145deg,#3a72a3,#23496d)}
+  .dot.mid{background:linear-gradient(145deg,#1a232e,#080c11)}
+
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  button{
+    flex:1 1 auto;min-width:96px;
+    appearance:none;cursor:pointer;
+    padding:8px 10px;border-radius:9px;
+    border:1px solid var(--stroke);
+    background:rgba(255,255,255,.06);
+    color:var(--ink);
+    font:inherit;font-size:11.5px;font-weight:500;letter-spacing:.2px;
+    transition:background .15s ease,border-color .15s ease,transform .06s ease;
+  }
+  button:hover{background:rgba(255,255,255,.12)}
+  button:active{transform:translateY(1px)}
+  button[aria-pressed="true"]{
+    background:rgba(58,114,163,.34);
+    border-color:rgba(110,170,220,.5);
+  }
+
+  .hint{
+    position:fixed;left:0;right:0;bottom:14px;
+    text-align:center;color:rgba(255,255,255,.32);
+    font-size:11px;letter-spacing:.4px;pointer-events:none;
+  }
+
+  #status{
+    position:fixed;inset:0;display:grid;place-content:center;
+    color:var(--muted);font-size:12.5px;letter-spacing:.4px;text-align:center;
+    padding:24px;background:#1e1e24;transition:opacity .5s ease;
+  }
+  #status.gone{opacity:0;pointer-events:none}
+
+  @media (max-width:520px){
+    .hud{top:10px;left:10px;right:10px;width:auto;padding:11px 12px}
+    .hud h1{font-size:12.5px}
+    .hud p,.swatches{display:none}
+    .row{gap:6px}
+    button{min-width:0;padding:7px 8px;font-size:11px}
+    .row{margin-top:10px}
+    .hint{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="view"></canvas></div>
+
+<div class="hud">
+  <h1>Custom iPhone 13: Blue Rails × Midnight Glass</h1>
+  <p>Factory Blue anodised aluminium · swapped Midnight back glass</p>
+  <div class="swatches">
+    <span class="sw"><i class="dot blue"></i>#2c5d88 rails</span>
+    <span class="sw"><i class="dot mid"></i>#111820 glass</span>
+  </div>
+  <div class="row">
+    <button id="reset" type="button">Reset view</button>
+    <button id="spin" type="button" aria-pressed="true">Auto-rotate</button>
+    <button id="flip" type="button">Flip side</button>
+  </div>
+</div>
+
+<div class="hint">drag to orbit · scroll or pinch to zoom</div>
+<div id="status">loading three.js…</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ------------------------------------------------------------------
+   Units: 1 world unit = 1 cm. iPhone 13 = 146.7 x 71.5 x 7.65 mm.
+------------------------------------------------------------------ */
+const W = 7.15;          // body width
+const H = 14.67;         // body height
+const D = 0.78;          // body thickness
+const R = 1.15;          // body corner radius
+const HW = W / 2, HH = H / 2, HD = D / 2;
+
+/* ---------------------------- geometry helpers ---------------------------- */
+function roundedRect(w, h, r) {
+  r = Math.min(r, Math.min(w, h) / 2);
+  const x = -w / 2, y = -h / 2;
+  const s = new THREE.Shape();
+  s.moveTo(x + r, y);
+  s.lineTo(x + w - r, y);
+  s.absarc(x + w - r, y + r, r, -Math.PI / 2, 0, false);
+  s.lineTo(x + w, y + h - r);
+  s.absarc(x + w - r, y + h - r, r, 0, Math.PI / 2, false);
+  s.lineTo(x + r, y + h);
+  s.absarc(x + r, y + h - r, r, Math.PI / 2, Math.PI, false);
+  s.lineTo(x, y + r);
+  s.absarc(x + r, y + r, r, Math.PI, Math.PI * 1.5, false);
+  return s;
+}
+
+// Slab with rounded outline + a small chamfer on both faces, centred on z.
+function slab(w, h, r, depth, bevel = 0.02, curveSegments = 48) {
+  const b = Math.min(bevel, depth / 2 - 1e-4);
+  const core = Math.max(depth - 2 * b, 1e-4);
+  const geo = new THREE.ExtrudeGeometry(roundedRect(w, h, r), {
+    depth: core, curveSegments,
+    bevelEnabled: b > 0, bevelThickness: b, bevelSize: b, bevelSegments: 3
+  });
+  geo.translate(0, 0, -core / 2);
+  return geo;
+}
+
+// Flat rounded-rect panel (single face), centred.
+function panel(w, h, r, curveSegments = 32) {
+  return new THREE.ShapeGeometry(roundedRect(w, h, r), curveSegments);
+}
+
+function mesh(geo, mat, x = 0, y = 0, z = 0) {
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set(x, y, z);
+  return m;
+}
+
+/* ------------------------------- materials -------------------------------- */
+// Bead-blasted anodised aluminium, iPhone 13 "Blue".
+const alumBlue = new THREE.MeshPhysicalMaterial({
+  color: 0x2c5d88, metalness: 0.62, roughness: 0.44,
+  clearcoat: 0.15, clearcoatRoughness: 0.6, envMapIntensity: 0.8
+});
+// Same alloy, buttons are a touch smoother from handling.
+const alumBlueBtn = new THREE.MeshPhysicalMaterial({
+  color: 0x2f6291, metalness: 0.66, roughness: 0.38,
+  clearcoat: 0.18, clearcoatRoughness: 0.55, envMapIntensity: 0.85
+});
+// Camera rings: the chassis poking through, slightly brighter machined edge.
+const alumRing = new THREE.MeshPhysicalMaterial({
+  color: 0x336a9c, metalness: 0.75, roughness: 0.3,
+  clearcoat: 0.25, clearcoatRoughness: 0.4, envMapIntensity: 1.0
+});
+// Swapped "Midnight" back glass — deep navy-black under a polished coat.
+const midnightGlass = new THREE.MeshPhysicalMaterial({
+  color: 0x0b1119, metalness: 0.12, roughness: 0.08,
+  clearcoat: 1.0, clearcoatRoughness: 0.07,
+  reflectivity: 0.58, envMapIntensity: 1.05
+});
+const midnightPlateau = new THREE.MeshPhysicalMaterial({
+  color: 0x0a1018, metalness: 0.14, roughness: 0.06,
+  clearcoat: 1.0, clearcoatRoughness: 0.05,
+  reflectivity: 0.62, envMapIntensity: 1.15
+});
+const frontGlassMat = new THREE.MeshPhysicalMaterial({
+  color: 0x050505, metalness: 0.08, roughness: 0.06,
+  clearcoat: 1.0, clearcoatRoughness: 0.05, envMapIntensity: 0.7
+});
+function screenSheen() {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 256;
+  const x = c.getContext('2d');
+  const g = x.createLinearGradient(0, 0, 64, 256);
+  g.addColorStop(0, '#16202c');
+  g.addColorStop(0.45, '#090d13');
+  g.addColorStop(0.75, '#0d141d');
+  g.addColorStop(1, '#05080c');
+  x.fillStyle = g; x.fillRect(0, 0, 64, 256);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const screenMat = new THREE.MeshPhysicalMaterial({
+  color: 0x050608, metalness: 0.04, roughness: 0.1,
+  clearcoat: 1.0, clearcoatRoughness: 0.07, envMapIntensity: 0.95,
+  emissive: 0xffffff, emissiveMap: screenSheen(), emissiveIntensity: 0.16
+});
+const bezelMat = new THREE.MeshStandardMaterial({
+  color: 0x020204, metalness: 0.0, roughness: 0.4, envMapIntensity: 0.35
+});
+const lensBarrel = new THREE.MeshStandardMaterial({
+  color: 0x06070a, metalness: 0.4, roughness: 0.35, envMapIntensity: 0.6
+});
+const lensGlass = new THREE.MeshPhysicalMaterial({
+  color: 0x070a12, metalness: 0.55, roughness: 0.05,
+  clearcoat: 1.0, clearcoatRoughness: 0.03, envMapIntensity: 1.3
+});
+const apertureMat = new THREE.MeshStandardMaterial({
+  color: 0x01010a, metalness: 0.2, roughness: 0.5
+});
+const flashMat = new THREE.MeshStandardMaterial({
+  color: 0xf6e9cd, metalness: 0.15, roughness: 0.38,
+  emissive: 0x2a2011, emissiveIntensity: 0.5
+});
+const antennaMat = new THREE.MeshStandardMaterial({
+  color: 0x23394d, metalness: 0.25, roughness: 0.6, envMapIntensity: 0.7
+});
+const darkHole = new THREE.MeshStandardMaterial({
+  color: 0x040507, metalness: 0.1, roughness: 0.85, envMapIntensity: 0.35
+});
+const portMat = new THREE.MeshStandardMaterial({
+  color: 0x050608, metalness: 0.15, roughness: 0.8, envMapIntensity: 0.35
+});
+
+/* --------------------------------- phone ---------------------------------- */
+const phone = new THREE.Group();
+
+/* 1. Flat-edge aluminium chassis (rails).
+   ExtrudeGeometry's bevel pushes the outline OUT by bevelSize, so the shape is
+   inset by that much: the rail faces then land exactly on ±W/2, ±H/2 and every
+   side feature below can be positioned against them. */
+const FB = 0.035;
+phone.add(mesh(slab(W - 2 * FB, H - 2 * FB, R - FB, D, FB, 96), alumBlue));
+
+/* 2. Midnight back glass, laid over the rails (0.1 mm proud, never coplanar). */
+const backT = 0.10;
+const BACKZ = -HD - 0.012;       // outer surface of the back glass
+phone.add(mesh(slab(W - 0.14, H - 0.14, R - 0.07, backT, 0.018, 96), midnightGlass, 0, 0, BACKZ + backT / 2));
+
+/* 3. Front cover glass + display + bezel. */
+const frontT = 0.09;
+const FRONTZ = HD + 0.012;       // outer surface of the cover glass
+phone.add(mesh(slab(W - 0.10, H - 0.10, R - 0.05, frontT, 0.018, 96), frontGlassMat, 0, 0, FRONTZ - frontT / 2));
+
+const bezelIn = 0.30;            // slim black border around the panel
+phone.add(mesh(panel(W - 0.10, H - 0.10, R - 0.05), bezelMat, 0, 0, FRONTZ + 0.002));
+phone.add(mesh(panel(W - 0.10 - 2 * bezelIn, H - 0.10 - 2 * bezelIn, R - 0.05 - bezelIn), screenMat, 0, 0, FRONTZ + 0.005));
+
+// Notch: speaker ear-piece + TrueDepth dot, hanging from the top bezel.
+const scrTop = (H - 0.10 - 2 * bezelIn) / 2;
+const notchH = 1.0, notchW = 2.72;
+const notchY = scrTop - 0.34;
+phone.add(mesh(panel(notchW, notchH, 0.34), bezelMat, 0, notchY, FRONTZ + 0.008));
+phone.add(mesh(panel(0.92, 0.12, 0.06), new THREE.MeshStandardMaterial({
+  color: 0x15171c, metalness: 0.2, roughness: 0.75
+}), -0.12, notchY + 0.10, FRONTZ + 0.011));
+phone.add(mesh(new THREE.CircleGeometry(0.095, 32), new THREE.MeshPhysicalMaterial({
+  color: 0x0a1220, metalness: 0.8, roughness: 0.06, clearcoat: 1, envMapIntensity: 1.4
+}), 0.66, notchY + 0.10, FRONTZ + 0.011));
+
+/* 4. Camera plateau — raised Midnight glass square, rear top-left. */
+const PW = 2.95, PT = 0.44, PZ = BACKZ - 0.20;     // outer face of the plateau
+const PX = 1.52, PY = 5.24;
+phone.add(mesh(slab(PW, PW, 0.95, PT, 0.085, 64), midnightPlateau, PX, PY, PZ + PT / 2));
+
+// Lathe profile for the protruding aluminium lens ring.
+function ringGeometry(rInner, rOuter, h) {
+  const p = [];
+  p.push(new THREE.Vector2(rInner, 0));
+  p.push(new THREE.Vector2(rInner, h * 0.85));
+  p.push(new THREE.Vector2(rInner + (rOuter - rInner) * 0.22, h));
+  p.push(new THREE.Vector2(rOuter - (rOuter - rInner) * 0.22, h * 0.97));
+  p.push(new THREE.Vector2(rOuter, h * 0.72));
+  p.push(new THREE.Vector2(rOuter, 0));
+  return new THREE.LatheGeometry(p, 64);
+}
+
+const RING_H = 0.22, RING_IN = 0.48, RING_OUT = 0.68;
+const SPH_R = 1.5, SPH_T = 0.305;                  // shallow lens dome: cap radius ~0.45
+const APEX = -(RING_H - 0.03);                     // dome tip, just inside the ring lip
+const DOME_RIM = APEX + SPH_R * (1 - Math.cos(SPH_T));
+
+function cameraModule(x, y) {
+  const g = new THREE.Group();
+
+  const ring = new THREE.Mesh(ringGeometry(RING_IN, RING_OUT, RING_H), alumRing);
+  ring.rotation.x = -Math.PI / 2;                  // lathe axis +Y -> -Z (out the back)
+  g.add(ring);
+
+  // Barrel kept just inside the ring wall so the two never fight for pixels.
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.47, RING_H, 48, 1, true), lensBarrel);
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.z = -RING_H / 2;
+  g.add(barrel);
+
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(SPH_R, 48, 24, 0, Math.PI * 2, 0, SPH_T), lensGlass);
+  dome.rotation.x = -Math.PI / 2;                  // pole -> -Z, curving out the back
+  dome.position.z = APEX + SPH_R;
+  g.add(dome);
+
+  const rimMask = mesh(new THREE.RingGeometry(0.44, 0.48, 48), lensBarrel, 0, 0, DOME_RIM - 0.003);
+  rimMask.rotation.y = Math.PI;                    // flat faces must be turned to face -Z
+  g.add(rimMask);
+
+  const pupil = mesh(new THREE.CircleGeometry(0.14, 40), apertureMat, 0, 0, APEX - 0.004);
+  pupil.rotation.y = Math.PI;
+  g.add(pupil);
+
+  g.position.set(x, y, PZ);
+  return g;
+}
+
+// Diagonal pair: wide top-left, ultra-wide bottom-right (rear view).
+phone.add(cameraModule(PX + 0.70, PY + 0.70));
+phone.add(cameraModule(PX - 0.70, PY - 0.70));
+
+// True Tone flash (aluminium collar + warm lens) and rear mic pinhole.
+const flash = new THREE.Group();
+const fRing = new THREE.Mesh(ringGeometry(0.155, 0.245, 0.095), alumRing);
+fRing.rotation.x = -Math.PI / 2;
+flash.add(fRing);
+const fLens = mesh(new THREE.CircleGeometry(0.16, 32), flashMat, 0, 0, -0.093);
+fLens.rotation.y = Math.PI;
+flash.add(fLens);
+flash.position.set(PX - 0.78, PY + 0.66, PZ);
+phone.add(flash);
+
+const micDot = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.05, 24), darkHole);
+micDot.rotation.x = Math.PI / 2;
+micDot.position.set(PX - 1.06, PY - 0.02, PZ + 0.02);
+phone.add(micDot);
+
+/* 5. Subtle mirrored Apple logo, centred on the back glass. */
+function appleLogoTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fff';
+  x.beginPath();
+  x.ellipse(100, 158, 56, 62, 0, 0, Math.PI * 2);
+  x.ellipse(156, 158, 56, 62, 0, 0, Math.PI * 2);
+  x.fill();
+  x.globalCompositeOperation = 'destination-out';
+  x.beginPath(); x.arc(128, 86, 42, 0, Math.PI * 2); x.fill();      // top dip
+  x.beginPath(); x.arc(216, 140, 40, 0, Math.PI * 2); x.fill();     // the bite
+  x.globalCompositeOperation = 'source-over';
+  x.fillStyle = '#fff';
+  x.beginPath();
+  x.moveTo(132, 102);
+  x.bezierCurveTo(136, 64, 160, 44, 186, 42);
+  x.bezierCurveTo(187, 74, 166, 100, 134, 104);
+  x.closePath(); x.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = THREE.RepeatWrapping;
+  t.repeat.x = -1; t.offset.x = 1;   // un-mirror: the plane is turned to face -Z
+  return t;
+}
+const logo = mesh(new THREE.PlaneGeometry(1.52, 1.52), new THREE.MeshPhysicalMaterial({
+  color: 0x2b3542, metalness: 0.95, roughness: 0.14,
+  clearcoat: 1, clearcoatRoughness: 0.1, envMapIntensity: 1.8,
+  transparent: true, alphaMap: appleLogoTexture(), depthWrite: false
+}), 0, -0.35, BACKZ - 0.004);
+logo.rotation.y = Math.PI;
+phone.add(logo);
+
+/* 6. Side buttons. Rails: +X = side/power button, -X = volume + mute + SIM. */
+function sideButton(len, zWidth, thick, protrude, side, y) {
+  const b = new THREE.Mesh(slab(zWidth, len, Math.min(zWidth, len) / 2.4, thick, 0.03, 24), alumBlueBtn);
+  b.rotation.y = side * Math.PI / 2;                 // local +Z -> world ±X
+  b.position.set(side * (HW + protrude - thick / 2), y, 0);
+  return b;
+}
+phone.add(sideButton(2.05, 0.44, 0.12, 0.055, 1, 3.05));    // side (power) button
+phone.add(sideButton(1.00, 0.44, 0.12, 0.055, -1, 4.05));   // volume up
+phone.add(sideButton(1.00, 0.44, 0.12, 0.055, -1, 2.72));   // volume down
+
+// Ring / silent switch: recessed slot with a small blue nub.
+const slot = new THREE.Mesh(slab(0.30, 0.72, 0.14, 0.10, 0.02, 20), darkHole);
+slot.rotation.y = -Math.PI / 2;
+slot.position.set(-(HW - 0.048), 5.42, 0);
+phone.add(slot);
+const nub = new THREE.Mesh(slab(0.22, 0.34, 0.10, 0.10, 0.02, 20), alumBlueBtn);
+nub.rotation.y = -Math.PI / 2;
+nub.position.set(-(HW - 0.008), 5.30, 0);
+phone.add(nub);
+
+/* 7. SIM tray seam + pinhole on the lower left rail. */
+const trayOuter = roundedRect(0.40, 1.36, 0.19);
+trayOuter.holes.push(new THREE.Path(roundedRect(0.36, 1.32, 0.17).getPoints(40).reverse()));
+const tray = new THREE.Mesh(new THREE.ShapeGeometry(trayOuter, 24), new THREE.MeshStandardMaterial({
+  color: 0x16283a, metalness: 0.5, roughness: 0.6
+}));
+tray.rotation.y = -Math.PI / 2;
+tray.position.set(-(HW + 0.002), -0.95, 0);
+phone.add(tray);
+const pin = new THREE.Mesh(new THREE.CircleGeometry(0.045, 20), darkHole);
+pin.rotation.y = -Math.PI / 2;
+pin.position.set(-(HW + 0.004), -0.95, 0);
+phone.add(pin);
+
+/* 8. Antenna bands wrapping the rails. */
+function bandX(side, y) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.085, D + 0.004), antennaMat);
+  b.position.set(side * (HW - 0.023), y, 0);
+  return b;
+}
+function bandY(sign, x) {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.05, D + 0.004), antennaMat);
+  b.position.set(x, sign * (HH - 0.023), 0);
+  return b;
+}
+[5.62, -5.62].forEach(y => { phone.add(bandX(1, y)); phone.add(bandX(-1, y)); });
+[2.25, -2.25].forEach(x => { phone.add(bandY(1, x)); phone.add(bandY(-1, x)); });
+
+/* 9. Bottom edge: Lightning port, speaker + mic grilles. */
+const port = new THREE.Mesh(slab(0.88, 0.245, 0.12, 0.30, 0.02, 24), portMat);
+port.rotation.x = Math.PI / 2;                     // local +Z -> -Y (into the body)
+port.position.set(0, -HH + 0.142, 0);
+phone.add(port);
+// Contact strip sitting in the mouth of the port.
+phone.add(mesh(new THREE.BoxGeometry(0.62, 0.012, 0.135), new THREE.MeshStandardMaterial({
+  color: 0x424954, metalness: 0.9, roughness: 0.35
+}), 0, -(HH + 0.014), 0));
+
+function grilleHole(x) {
+  const h = new THREE.Mesh(new THREE.CylinderGeometry(0.048, 0.048, 0.12, 18), darkHole);
+  h.position.set(x, -HH + 0.045, 0);
+  return h;
+}
+for (let i = 0; i < 6; i++) phone.add(grilleHole(0.74 + i * 0.19));    // speaker
+for (let i = 0; i < 3; i++) phone.add(grilleHole(-0.74 - i * 0.19));   // mic
+// Top edge mic.
+const topMic = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.12, 16), darkHole);
+topMic.position.set(1.05, HH - 0.045, 0);
+phone.add(topMic);
+
+/* ---------------------------- renderer & scene ---------------------------- */
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.96;
+
+const scene = new THREE.Scene();
+scene.background = backgroundTexture();
+scene.add(phone);
+
+function backgroundTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 512;
+  const x = c.getContext('2d');
+  const g = x.createRadialGradient(256, 210, 40, 256, 300, 400);
+  g.addColorStop(0, '#33333d');
+  g.addColorStop(0.55, '#232329');
+  g.addColorStop(1, '#141418');
+  x.fillStyle = g;
+  x.fillRect(0, 0, 512, 512);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// Studio softboxes baked into an environment map: long, clean highlights
+// across the glossy Midnight glass, gentle sheen on the blasted rails.
+function studioEnvironment() {
+  const env = new THREE.Scene();
+  env.background = new THREE.Color(0x0b0b0f);
+  const box = (w, h, hex, intensity, pos, rot) => {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color(hex).multiplyScalar(intensity),
+        side: THREE.DoubleSide
+      })
+    );
+    m.position.set(...pos);
+    if (rot) m.rotation.set(...rot);
+    env.add(m);
+  };
+  box(5.0, 30, 0xffffff, 3.2, [-2, 13, 3], [Math.PI / 2, 0, 0]);  // long overhead softbox
+  box(2.6, 22, 0xfff4e6, 1.5, [6, 12, -2], [Math.PI / 2, 0, 0]);  // warm second bank
+  box(3.2, 28, 0xeef3ff, 2.4, [-13, 1, 4], [0, Math.PI / 2, 0]);  // cool left strip
+  box(2.2, 20, 0xfff0da, 1.3, [13, 0, 2], [0, -Math.PI / 2, 0]);  // warm right strip
+  box(5.0, 28, 0xdfe9ff, 2.9, [-5, 2, -14], [0, 0, 0]);           // rim strips behind
+  box(3.0, 20, 0xffffff, 1.7, [6.5, 1, -14], [0, 0, 0]);
+  box(26, 20, 0x93a6c4, 0.3, [0, 0, -17], [0, 0, 0]);             // dim rear ambience
+  box(9, 7, 0xffffff, 0.30, [0, -2, 16], [0, Math.PI, 0]);        // low front fill
+  box(40, 40, 0x8ea0bb, 0.34, [0, -12, 0], [-Math.PI / 2, 0, 0]); // dim bounce card below
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const tex = pmrem.fromScene(env, 0.03).texture;
+  pmrem.dispose();
+  return tex;
+}
+scene.environment = studioEnvironment();
+
+// Punch lights on top of the environment for crisp edge definition.
+const key = new THREE.DirectionalLight(0xffffff, 1.45); key.position.set(6, 9, 8);
+const fill = new THREE.DirectionalLight(0xd6e1f2, 0.5); fill.position.set(-9, 1, 7);
+const rim = new THREE.DirectionalLight(0xaecdff, 1.25); rim.position.set(-5, 4, -9);
+const rim2 = new THREE.DirectionalLight(0xffd7a8, 0.7); rim2.position.set(7, -3, -7);
+const rear = new THREE.DirectionalLight(0xffffff, 0.85); rear.position.set(3, 8, -10);
+scene.add(key, fill, rim, rim2, rear, new THREE.AmbientLight(0xffffff, 0.09));
+
+/* ------------------------------ camera & controls ------------------------- */
+const camera = new THREE.PerspectiveCamera(30, 1, 0.5, 200);
+const HOME_DIR = new THREE.Vector3(12.5, 5.2, -18.5).normalize();
+
+// On a narrow screen the model is pushed below the overlay panel.
+const frameOffset = () => (camera.aspect < 0.8 ? 1.15 : 0);
+
+// Distance at which the whole body stays inside the frame, whatever the aspect.
+function fitDistance() {
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const margin = camera.aspect < 0.8 ? 1.24 : 1.14;
+  const vertical = (H * margin + 2 * frameOffset()) / 2 / t;
+  const horizontal = (W * 1.45) / 2 / (t * camera.aspect);
+  return Math.min(Math.max(vertical, horizontal), 58);
+}
+// Camera distances are measured from the orbit target, which shifts on mobile.
+const home = () => HOME_DIR.clone().multiplyScalar(fitDistance()).add(controls.target);
+const orbitDistance = () => camera.position.distanceTo(controls.target);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.055;
+controls.rotateSpeed = 0.85;
+controls.zoomSpeed = 0.8;
+controls.enablePan = false;
+controls.minDistance = 10;
+controls.maxDistance = 70;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.65;
+controls.target.set(0, 0, 0);
+
+/* --------------------------------- UI ------------------------------------- */
+const spinBtn = document.getElementById('spin');
+const setSpin = (on) => {
+  controls.autoRotate = on;
+  spinBtn.setAttribute('aria-pressed', String(on));
+};
+controls.addEventListener('start', () => setSpin(false));   // idle spin yields to the user
+spinBtn.addEventListener('click', () => setSpin(!controls.autoRotate));
+
+let tween = null;
+function flyTo(pos, ms = 700) {
+  tween = { from: camera.position.clone(), to: pos.clone(), t: 0, ms };
+}
+document.getElementById('reset').addEventListener('click', () => { setSpin(false); flyTo(home()); });
+
+let showingBack = true;   // the view we open on
+document.getElementById('flip').addEventListener('click', () => {
+  showingBack = !showingBack;
+  setSpin(false);
+  const d = Math.max(orbitDistance(), fitDistance());
+  flyTo(new THREE.Vector3(showingBack ? 1.1 : -1.1, 0.85, showingBack ? -3.6 : 3.6)
+    .normalize().multiplyScalar(d).add(controls.target));
+});
+
+/* -------------------------------- loop ------------------------------------ */
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  controls.target.y = frameOffset();
+  // Never let a narrow viewport crop the body.
+  const off = camera.position.clone().sub(controls.target);
+  camera.position.copy(controls.target).add(off.setLength(Math.max(off.length(), fitDistance())));
+  controls.update();
+}
+window.addEventListener('resize', resize);
+camera.position.copy(HOME_DIR).multiplyScalar(32);
+resize();
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  if (tween) {
+    tween.t = Math.min(1, tween.t + (dt * 1000) / tween.ms);
+    const e = 1 - Math.pow(1 - tween.t, 3);                 // ease-out cubic
+    camera.position.lerpVectors(tween.from, tween.to, e);
+    if (tween.t >= 1) tween = null;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+const status = document.getElementById('status');
+requestAnimationFrame(() => {
+  status.classList.add('gone');
+  setTimeout(() => status.remove(), 600);
+});
+</script>
+<script>
+window.addEventListener('error', (e) => {
+  const s = document.getElementById('status');
+  if (s) {
+    s.classList.remove('gone');
+    s.textContent = 'Could not load three.js from the CDN — an internet connection is required. (' + (e.message || 'error') + ')';
+  }
+}, true);
+</script>
+</body>
+</html>
